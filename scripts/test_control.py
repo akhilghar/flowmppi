@@ -24,6 +24,8 @@ import time
 def parse_arguments():
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', type=str, required=True)
+    parser.add_argument('--static', action='store_true',
+                        help='freeze obstacles (static baseline); default is dynamic')
     args = parser.parse_args()
     return args
 
@@ -137,7 +139,7 @@ def visualise_trajectory(start, goal, trajectories, sdf, env_no, controller, env
     plt.close()
 '''
 
-def test_controller(env, controller, T=50):
+def test_controller(env, controller, T=50, dt=0.01, dynamic=True):
     total_start = time.time()
     state_history = []
     control_history = []
@@ -146,6 +148,7 @@ def test_controller(env, controller, T=50):
     state_history.append(state)
     planned_control_sequences = []
     collision_failure = False
+    min_clearance = np.inf   # min signed distance to nearest obstacle over the run
     projected_envs = []
     project_imag_time = 0
     # Let's project upfront a little bit just to get started
@@ -171,6 +174,14 @@ def test_controller(env, controller, T=50):
     loss_times = [] #compute_loss function under controller_wrapper.py in iterations
     for i in range(T):
         print(f"episode {i}")
+        # --- Dynamic obstacles: advance the world one step, recompute the SDF, and
+        #     re-encode it so the flow/controller conditions on the CURRENT obstacle
+        #     positions (receding-horizon "snapshot" of a moving environment).
+        #     `dynamic=False` freezes obstacles for a matched static baseline. ---
+        if dynamic:
+            env.update_world(dt)
+            sdf, sdf_grad = env.get_sdf()
+            controller.update_environment(sdf, sdf_grad)
         episode_start = time.time()
         if not collision_failure:
             count += 1
@@ -196,6 +207,12 @@ def test_controller(env, controller, T=50):
             controller_step = etime - stime
             new_state, collision = env.step(new_control)
             collision_failure = collision_failure or collision
+
+            # signed distance to nearest obstacle at the robot's current cell
+            # (SDF was recomputed this step from the moving obstacles)
+            px = env.world.position_to_pixels(env.state[:env.world.dw])
+            px = np.clip(px, 0, np.array(env.world.sdf.shape) - 1)
+            min_clearance = min(min_clearance, float(env.world.sdf[tuple(px)]))
         if controller.action_sampler is not None:
             projected_envs.append(controller.imagined_sdf)
 
@@ -286,7 +303,8 @@ def test_controller(env, controller, T=50):
         writer.writerow(other_times)
 
 
-    return -cost, state_history, control_history, planned_control_sequences, failure, projected_envs, total_time / count
+    return (-cost, state_history, control_history, planned_control_sequences, failure,
+            projected_envs, total_time / count, collision_failure, min_clearance)
 
 
 if __name__ == '__main__':
@@ -346,6 +364,8 @@ if __name__ == '__main__':
         test_results[controller_name]['success'] = []
         test_results[controller_name]['smoothness'] = []
         test_results[controller_name]['compute_time'] = []
+        test_results[controller_name]['collision'] = []
+        test_results[controller_name]['min_clearance'] = []
 
         # make sure folders exist
         pathlib.Path(f'{FLOW_MPC_ROOT}/figures/{config["name"]}/control_test/{controller_name}/{str(env)}').mkdir(
@@ -406,10 +426,10 @@ if __name__ == '__main__':
             controller.update_environment(sdf, sdf_grad)
             controller.update_cost_params(cost_params)
 
-            likelihood, states, controls, planned_controls, failure, projected_sdfs, comp_time = test_controller(env,
-                                                                                                                 controller,
-                                                                                                                 config[
-                                                                                                                     "episode_length"])
+            (likelihood, states, controls, planned_controls, failure, projected_sdfs,
+             comp_time, collided, min_clr) = test_controller(
+                env, controller, config["episode_length"],
+                dt=config.get('dt', 0.01), dynamic=not args.static)
             '''
             if controller.project and config['world_dim'] == 2:
                 # controller.project_imagined_environment(env.start.copy())
@@ -469,6 +489,8 @@ if __name__ == '__main__':
             test_results[name]['success'].append(0.0 if failure else 1.0)
             test_results[name]['smoothness'].append(np.sum(np.diff(controls, axis=0) ** 2) / config['num_envs'])
             test_results[name]['compute_time'].append(comp_time)
+            test_results[name]['collision'].append(1.0 if collided else 0.0)
+            test_results[name]['min_clearance'].append(min_clr)
             planned_trajectories = get_planned_trajectory(states[:-1],
                                                           goal, sdf,
                                                           planned_controls.reshape(-1, config['horizon'],
@@ -486,10 +508,12 @@ if __name__ == '__main__':
             #save_visualisation_data(env.start.copy(), goal.copy(), sdf, states.reshape(-1, env.state_dim),
               #                      planned_trajectories, num_env, name, str(env), config['name'])
 
-        print(f'### {num_env} ###')
+        print(f'### {num_env} ###  [{"STATIC" if args.static else "DYNAMIC"} obstacles]')
         for controller, results in test_results.items():
             print(f'Average cost for {controller}: {np.mean(results["total_costs"])}')
             print(f'Average success for {controller}: {np.mean(results["success"])}')
+            print(f'Collision rate for {controller}: {np.mean(results["collision"])}')
+            print(f'Mean min-clearance for {controller}: {np.mean(results["min_clearance"])}')
             print(f'Average smoothness for {controller}: {np.mean(results["smoothness"])}')
             print(f'Average compute time for {controller}: {np.mean(results["compute_time"])}')
 
