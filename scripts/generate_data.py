@@ -1,8 +1,7 @@
 import argparse
 import numpy as np
-from flow_mpc.environments import DoubleIntegratorEnv, QuadcopterEnv, QuadcopterDynamicEnv, VictorEnv
-from flow_mpc.controllers import FlowMPPI
-from flow_mpc.models import QuadcopterModel, DoubleIntegratorModel, VictorModel
+from flow_mpc.environments import DoubleIntegratorEnv, QuadcopterEnv, QuadcopterDynamicEnv
+from flow_mpc.models import QuadcopterModel, DoubleIntegratorModel
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -125,7 +124,11 @@ if __name__ == '__main__':
 
     controller = None
     if args.generate_trajectory:
-        controller = FlowMPPI(generative_model, args.H, control_dim, state_dim, N=1000, device='cuda:0', sigma=1.2, lambda_=1)
+        # FlowMPPI was removed when flow_mpc.controllers was refactored to MPCController.
+        from flow_mpc.controllers import MPCController
+        config = {'name': 'flowmppi', 'lambda': 1, 'sigma': 1.2, 'iters': 1, 'project': False}
+        controller = MPCController(generative_model, args.H, control_dim, state_dim, config,
+                                    N=1000, device=args.device)
 
     env.reset()
     data = generate_planning_dataset(env, args.N, args.planning_problems_per_env, controller)

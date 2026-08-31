@@ -144,7 +144,7 @@ class MPCController:
         return U.reshape(N, self.H, self.du)
 
     def update_environment(self, sdf, sdf_grad=None):
-        self.sdf = torch.from_numpy(sdf).to(device=self.device).unsqueeze(0).unsqueeze(1)
+        self.sdf = torch.from_numpy(sdf).float().to(device=self.device).unsqueeze(0).unsqueeze(1)
         self.raw_sdf = sdf
         self.normalised_sdf = torch.where(self.sdf < 0, self.sdf / 1000.0,
                                           self.sdf)  # + 0.02 * torch.randn_like(self.sdf)

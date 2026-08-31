@@ -2,9 +2,6 @@ import torch
 import pathlib
 import argparse
 import numpy as np
-# annoying numpy deprecation issue
-np.bool = bool
-np.float = float
 from cv2 import resize
 #import matplotlib.pyplot as plt
 #import matplotlib.animation as animation

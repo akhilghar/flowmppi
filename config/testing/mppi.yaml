@@ -20,7 +20,7 @@ vae_flow_prior: True
 voxels: False
 
 # randomization of parameters
-device: 'cuda:0'
+device: 'cpu'
 randomize_cost_params: False
 # Only relevant if randomise_cost_params is True
 condition_on_cost_params: False

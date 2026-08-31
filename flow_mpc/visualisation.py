@@ -26,7 +26,7 @@ def add_trajectory_to_axis(ax, start, goal, trajectories, sdf):
 def add_trajectory_to_axis_3d(ax, start, goal, trajectories, sdf):
     goal = np.clip(64 * (goal[:3] + 2) / 4, a_min=0, a_max=63)
     start = np.clip(64 * (start[:3] + 2) / 4, a_min=0, a_max=63)
-    voxels = np.where(sdf < 0, np.ones_like(sdf), np.zeros_like(sdf)).astype(dtype=np.bool)
+    voxels = np.where(sdf < 0, np.ones_like(sdf), np.zeros_like(sdf)).astype(dtype=bool)
     ax.voxels(voxels, facecolors='k', alpha=0.25)
 
     positions = trajectories[:, :, :3]
