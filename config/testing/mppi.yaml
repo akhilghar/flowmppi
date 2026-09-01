@@ -3,7 +3,7 @@ name: 'double_integrator_test_rss_double_integrator/best_model'
 
 # Environment
 env: 'double_integrator'
-obstacle_type: 'spheres'
+obstacle_type: 'narrow_passages'
 world_dim: 2
 state_dim: 4
 control_dim: 2
@@ -29,7 +29,7 @@ min_sigma: 0.2
 min_lengthscale: 0.02
 min_vel_penalty: 0.01
 
-num_envs: 30
+num_envs: 1
 episode_length: 100
 normalize_costs: True
 

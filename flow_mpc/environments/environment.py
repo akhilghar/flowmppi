@@ -55,9 +55,3 @@ class Environment:
     def get_sdf(self):
         return self.world.sdf, self.world.sdf_grad
 
-    def update_world(self, dt):
-        if self.world_type == 'spheres':
-            self.world.step(dt)
-        else:
-            pass
-
