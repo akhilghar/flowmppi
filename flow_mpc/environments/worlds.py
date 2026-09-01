@@ -26,6 +26,8 @@ class World:
         self.sdf = np.zeros(self.grid_size)
         self.sdf_grad = np.zeros(self.grid_size)
 
+        self.robot_radius = 0.0
+
     def reset(self):
         self.grid = self._get_occupancy_grid()
         self.sdf, self.sdf_grad = self.get_environment_sdf()
@@ -79,11 +81,15 @@ class World:
             return True
         return False
 
-    def check_collision(self, position):
+    def check_collision(self, position, robot_radius=None):
         pixels = self.position_to_pixels(position)
-        if not self.check_bounds(pixels):
-            return self.grid[tuple(pixels)]
-        return True
+        if self.check_bounds(pixels):
+            return True
+        r = self.robot_radius if robot_radius is None else robot_radius
+        return bool(self.sdf[tuple(pixels)] < r)
+
+    def step(self, dt):
+        pass
 
 
 class FromFileWorld(World):
@@ -110,9 +116,13 @@ class SphereWorld(World):
         self.min_r = min_radius
         self.obstacle_distance_norm = 2
 
+        self.obstacle_positions = None
+        self.obstacle_radii = None
+        self.obstacle_velocities = None
+
     def _get_occupancy_grid(self):
-        obstacle_positions, obstacle_radii = self._generate_environment()
-        occupancy_grid = self._get_occupancy(obstacle_positions, obstacle_radii)
+        self.obstacle_positions, self.obstacle_radii, self.obstacle_velocities = self._generate_environment()
+        occupancy_grid = self._get_occupancy()   # now reads self.obstacle_positions/radii
         return occupancy_grid
 
     def _generate_environment(self):
@@ -124,17 +134,35 @@ class SphereWorld(World):
         halton_end_idx = halton_start_idx + num_obstacles
 
         # obstacle positions in range [-0.5, 0.5]
-        obstacle_positions = self.halton_samples[halton_start_idx:halton_end_idx] - 0.5
-        obstacle_positions *= 0.95 * self.world_size
+        self.obstacle_positions = self.halton_samples[halton_start_idx:halton_end_idx] - 0.5
+        self.obstacle_positions *= 0.95 * self.world_size
+
+        # Obstacle velocities (for dynamic case)
+        self.obstacle_velocities = np.random.uniform(low=-0.5, high=0.5, size=(num_obstacles, self.dw))
 
         # Randomise obsacle radii
-        obstacle_radii = self.min_r + (self.max_r - self.min_r) * np.random.uniform(size=num_obstacles)
+        self.obstacle_radii = self.min_r + (self.max_r - self.min_r) * np.random.uniform(size=num_obstacles)
 
-        return obstacle_positions, obstacle_radii
+        return self.obstacle_positions, self.obstacle_radii, self.obstacle_velocities
 
-    def _get_occupancy(self, obstacle_positions, obstacle_radii):
+    def _move_obstacles(self, dt):
+        self.obstacle_positions = self.obstacle_positions + self.obstacle_velocities * dt
+
+        # Check for wall collisions
+        for i in range(self.obstacle_positions.shape[0]):
+            for d in range(self.dw):
+                if self.obstacle_positions[i, d] < -self.world_size / 2:
+                    self.obstacle_positions[i, d] = -self.world_size / 2 + (self.obstacle_positions[i, d] + self.world_size / 2)
+                    self.obstacle_velocities[i, d] *= -1
+                elif self.obstacle_positions[i, d] > self.world_size / 2:
+                    self.obstacle_positions[i, d] = self.world_size / 2 - (self.obstacle_positions[i, d] - self.world_size / 2)
+                    self.obstacle_velocities[i, d] *= -1
+
+        return self.obstacle_positions, self.obstacle_velocities
+
+    def _get_occupancy(self):
         imsize = 64
-        N_obstacles = obstacle_positions.shape[0]
+        N_obstacles = self.obstacle_positions.shape[0]
 
         environment_limits = [-self.world_size / 2, self.world_size / 2]
         distance_per_pixel = (environment_limits[1] - environment_limits[0]) / imsize
@@ -148,8 +176,8 @@ class SphereWorld(World):
         pixel_locations = np.expand_dims(np.stack(pixel_locations, axis=-1), axis=-2).repeat(N_obstacles, axis=-2)
 
         for _ in range(self.dw):
-            obstacle_positions = np.expand_dims(obstacle_positions, axis=0).repeat(imsize, axis=0)
-            obstacle_radii = np.expand_dims(obstacle_radii, axis=0).repeat(imsize, axis=0)
+            obstacle_positions = np.expand_dims(self.obstacle_positions, axis=0).repeat(imsize, axis=0)
+            obstacle_radii = np.expand_dims(self.obstacle_radii, axis=0).repeat(imsize, axis=0)
 
         distance_to_obstacle_centres = np.linalg.norm(pixel_locations - obstacle_positions,
                                                       axis=-1, ord=self.obstacle_distance_norm)
@@ -165,6 +193,11 @@ class SphereWorld(World):
         # self.add_rectangle(self.grid, (-1.9, 1.9), width=4, height=0.2)
         # self.grid = 1.0 - self.grid
         return grid
+
+    def step(self, dt):
+        self.obstacle_positions, self.obstacle_velocities = self._move_obstacles(dt)
+        self.grid = self._get_occupancy()
+        self.sdf, self.sdf_grad = self.get_environment_sdf()
 
 
 class SquareWorld(SphereWorld):

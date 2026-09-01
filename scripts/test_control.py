@@ -3,8 +3,8 @@ import pathlib
 import argparse
 import numpy as np
 from cv2 import resize
-#import matplotlib.pyplot as plt
-#import matplotlib.animation as animation
+import matplotlib.pyplot as plt
+import matplotlib.animation as animation
 import sys
 sys.path.insert(1, '/home/htsheng/flowmppi/flow_mpc')
 from flow_mpc.environments import DoubleIntegratorEnv, QuadcopterEnv, QuadcopterDynamicEnv
@@ -27,10 +27,9 @@ def parse_arguments():
     args = parser.parse_args()
     return args
 
-'''
 def create_animation(start, goal, sdf, trajectories, planned_trajectories, projected_sdfs, env_no, controller, env_type,
                      name,
-                     costs=None):
+                     costs=None, sdf_history=None):
     #import matplotlib.pylab as pl
 
     # costs -= np.max(costs, axis=1, keepdims=True)
@@ -67,10 +66,14 @@ def create_animation(start, goal, sdf, trajectories, planned_trajectories, proje
     alpha = min(0.1 + 4.0 / planned_positions.shape[1], 1)
 
     def animate(frames):
+        t = frames['t']
+        # If we recorded the obstacle field at each timestep, draw the frame
+        # against the SDF for that step so the obstacles actually move.
+        frame_sdf = resize(sdf_history[t], (256, 256)) if sdf_history is not None else big_sdf
 
         def plot_on_sdf(sdf, ax):
-            ax.lines = []
-            ax.patches = []
+            for artist in list(ax.lines) + list(ax.patches) + list(ax.images):
+                artist.remove()
 
             ims = [ax.imshow(sdf[::-1]),
                    ax.plot(goal[0], 255 - goal[1], marker='o', color="red", linewidth=4)[0],
@@ -87,7 +90,7 @@ def create_animation(start, goal, sdf, trajectories, planned_trajectories, proje
                             color=color, alpha=alpha))
             return ims
 
-        ims = plot_on_sdf(big_sdf, ax)
+        ims = plot_on_sdf(frame_sdf, ax)
 
         if projected_sdfs is not None:
             projected_big_sdf = resize(projected_sdfs[frames['t']], (256, 256))
@@ -102,7 +105,6 @@ def create_animation(start, goal, sdf, trajectories, planned_trajectories, proje
     plt.close()
 
     return ani
-'''
 
 def Average(array_in):
     return sum(array_in)/len(array_in)
@@ -117,7 +119,6 @@ def save_visualisation_data(start, goal, sdf, trajectories, planning_trajectorie
     data['planned_X'] = planning_trajectories
     np.savez(fname, **data)
 
-'''
 def visualise_trajectory(start, goal, trajectories, sdf, env_no, controller, env_type, name):
     fig, ax = plt.subplots(1, 1)
     big_sdf = resize(sdf, (256, 256))
@@ -135,15 +136,16 @@ def visualise_trajectory(start, goal, trajectories, sdf, env_no, controller, env
     # plt.show()
     plt.savefig(f'{FLOW_MPC_ROOT}/figures/{name}/control_test/{env_type}/env_{env_no}_{controller}.png')
     plt.close()
-'''
 
-def test_controller(env, controller, T=50):
+def test_controller(env, controller, T=50, dynamic=True):
     total_start = time.time()
     state_history = []
     control_history = []
+    sdf_history = []
     state = env.state
 
     state_history.append(state)
+    sdf_history.append(env.world.sdf.copy())
     planned_control_sequences = []
     collision_failure = False
     projected_envs = []
@@ -196,6 +198,12 @@ def test_controller(env, controller, T=50):
             controller_step = etime - stime
             new_state, collision = env.step(new_control)
             collision_failure = collision_failure or collision
+
+            if dynamic:
+                # Advance the moving obstacles and re-condition the controller
+                # on the updated environment so it plans against them.
+                env.world.step(env.dt)
+                controller.update_environment(env.world.sdf, env.world.sdf_grad)
         if controller.action_sampler is not None:
             projected_envs.append(controller.imagined_sdf)
 
@@ -212,10 +220,12 @@ def test_controller(env, controller, T=50):
         state_history.append(state.copy())
         control_history.append(control.copy())
         planned_control_sequences.append(control_sequence.copy())
+        sdf_history.append(env.world.sdf.copy())
 
     state_history = np.asarray(state_history)
     control_history = np.asarray(control_history)
     planned_control_sequences = np.asarray(planned_control_sequences)
+    sdf_history = np.asarray(sdf_history)
     failure = collision_failure or not env.at_goal()
     
     if len(projected_envs) > 0:
@@ -286,7 +296,7 @@ def test_controller(env, controller, T=50):
         writer.writerow(other_times)
 
 
-    return -cost, state_history, control_history, planned_control_sequences, failure, projected_envs, total_time / count
+    return -cost, state_history, control_history, planned_control_sequences, failure, projected_envs, total_time / count, sdf_history
 
 
 if __name__ == '__main__':
@@ -294,6 +304,9 @@ if __name__ == '__main__':
     import yaml
 
     config = yaml.safe_load(pathlib.Path(f'{FLOW_MPC_ROOT}/config/testing/{args.config}').read_text())
+
+    # Advance obstacles over the episode when enabled (spheres world only).
+    dynamic = config.get('dynamic_obstacles', False)
 
     pathlib.Path(f'{FLOW_MPC_ROOT}/figures/{config["name"]}/control_test/{config["obstacle_type"]}').mkdir(parents=True,
                                                                                                            exist_ok=True
@@ -391,6 +404,18 @@ if __name__ == '__main__':
         goal = env.goal
         sdf, sdf_grad = env.get_sdf()
 
+        # Static vs dynamic is purely a velocity toggle: in the static case we
+        # zero the obstacle velocities so nothing can drift even if the world is
+        # stepped. In the dynamic case we snapshot the freshly-generated layout
+        # so every controller in this env starts from the same obstacles.
+        init_obstacle_state = None
+        if getattr(env.world, 'obstacle_velocities', None) is not None:
+            if not dynamic:
+                env.world.obstacle_velocities[:] = 0.0
+            else:
+                init_obstacle_state = (env.world.obstacle_positions.copy(),
+                                       env.world.obstacle_velocities.copy())
+
         # randomize cost parameters
         if config['randomize_cost_params']:
             cost_params = gen_cost_params(config)
@@ -401,16 +426,19 @@ if __name__ == '__main__':
 
         for name, controller in controllers.items():
             env.state = env.start.copy()
+            if init_obstacle_state is not None:
+                env.world.obstacle_positions = init_obstacle_state[0].copy()
+                env.world.obstacle_velocities = init_obstacle_state[1].copy()
+                env.world.grid = env.world._get_occupancy()
+                env.world.sdf, env.world.sdf_grad = env.world.get_environment_sdf()
             controller.reset()
             controller.update_goal(goal)
             controller.update_environment(sdf, sdf_grad)
             controller.update_cost_params(cost_params)
 
-            likelihood, states, controls, planned_controls, failure, projected_sdfs, comp_time = test_controller(env,
-                                                                                                                 controller,
-                                                                                                                 config[
-                                                                                                                     "episode_length"])
-            '''
+            likelihood, states, controls, planned_controls, failure, projected_sdfs, comp_time, sdf_history = test_controller(
+                env, controller, config["episode_length"], dynamic=dynamic)
+            
             if controller.project and config['world_dim'] == 2:
                 # controller.project_imagined_environment(env.start.copy())
                 fig, axes = plt.subplots(1, 2)
@@ -420,7 +448,6 @@ if __name__ == '__main__':
                 plt.savefig(
                     f'{FLOW_MPC_ROOT}/figures/{config["name"]}/control_test/{config["obstacle_type"]}/projected_env_{num_env}.png')
                 plt.close()
-            '''
 
             def get_planned_trajectory(states, goal, sdf, planned_controls):
                 N, T, _ = planned_controls.shape
@@ -476,11 +503,11 @@ if __name__ == '__main__':
                                                                                        'control_dim']))
 
             # can only create animation if 2D
-            #if config['world_dim'] == 2:
-                #create_animation(env.start.copy(), goal.copy(), sdf, states.reshape(-1, config['state_dim']),
-                 #                planned_trajectories, projected_sdfs, num_env, name, config['obstacle_type'],
-                  #               config['name'],
-                   #              None)
+            if config['world_dim'] == 2:
+                create_animation(env.start.copy(), goal.copy(), sdf, states.reshape(-1, config['state_dim']),
+                                 planned_trajectories, projected_sdfs, num_env, name, config['obstacle_type'],
+                                 config['name'],
+                                 None, sdf_history=sdf_history if dynamic else None)
 
             # Save trial data
             #save_visualisation_data(env.start.copy(), goal.copy(), sdf, states.reshape(-1, env.state_dim),
