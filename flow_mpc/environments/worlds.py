@@ -138,7 +138,7 @@ class SphereWorld(World):
         self.obstacle_positions *= 0.95 * self.world_size
 
         # Obstacle velocities (for dynamic case)
-        self.obstacle_velocities = np.random.uniform(low=-0.5, high=0.5, size=(num_obstacles, self.dw))
+        self.obstacle_velocities = np.random.uniform(low=-1.0, high=1.0, size=(num_obstacles, self.dw))
 
         # Randomise obsacle radii
         self.obstacle_radii = self.min_r + (self.max_r - self.min_r) * np.random.uniform(size=num_obstacles)
