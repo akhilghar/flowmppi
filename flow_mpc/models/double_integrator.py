@@ -10,7 +10,7 @@ class DoubleIntegratorDynamics(nn.Module):
 
     def __init__(self, dim=2):
         super(DoubleIntegratorDynamics, self).__init__()
-        dt = 0.01
+        dt = 0.05
         self.dt = dt
 
         if dim == 2:

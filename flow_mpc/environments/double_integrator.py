@@ -6,7 +6,7 @@ from flow_mpc.environments.environment import Environment
 
 class DoubleIntegratorEnv(Environment):
 
-    def __init__(self, world_dim=2, world_type='spheres', dt=0.01):
+    def __init__(self, world_dim=2, world_type='spheres', dt=0.05):
         # Double integrator in either 2D or 3D
         state_dim = 2 * world_dim
         control_dim = world_dim
